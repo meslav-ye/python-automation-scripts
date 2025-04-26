@@ -1,0 +1,2 @@
+oci>=2.119.1
+kubernetes

@@ -1,0 +1,191 @@
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: scaling-config
+  namespace: tools
+data:
+  config.json: |
+    {
+      "node_pool_ids": [
+        "ocid1.nodepool.oc1.iad.foobar",
+        "ocid1.nodepool.oc1.iad.zzz",
+        "ocid1.nodepool.oc1.iad.yyy"
+      ],
+      "resource_order":
+        ["statefulset/zk-ext-zookeeper","zk-ext"],
+        ["deployment/pgo","postgres-operator"],
+        ["deployment/risingwave-operator","risingwave-operator-system"],
+        ["statefulset/replayplayer-service","replay"],
+        ["deployment/red-panda-console","red-panda"],
+        ["deployment/spark-operator-controller","spark-operator"],
+        ["deployment/spark-operator-webhook","spark-operator"],
+        ["deployment/metabase","metabase"],
+        ["deployment/risingwave-postgresql-s3-compactor","risingwave-wasabi"],
+        ["deployment/risingwave-postgresql-s3-frontend","risingwave-wasabi"],
+        ["statefulset/risingwave-postgresql-s3-compute","risingwave-wasabi"],
+        ["statefulset/risingwave-postgresql-s3-meta","risingwave-wasabi"],
+        ["statefulset/risingwave-wasabi-instance1-bl7b","risingwave-wasabi"],
+        ["statefulset/risingwave-wasabi-instance2-h6p5","risingwave-wasabi"],
+        ["statefulset/risingwave-wasabi-instance3-rsrg","risingwave-wasabi"],
+        ["statefulset/risingwave-wasabi-repo-host","risingwave-wasabi"],
+        ["statefulset/nfs-provisioner-nfs-server-provisioner","nfs-provisioner"],
+        ["statefulset/argocd-application-controller","argocd"],
+        ["deployment/argocd-applicationset-controller","argocd"],
+        ["deployment/argocd-dex-server","argocd"],
+        ["deployment/argocd-notifications-controller","argocd"],
+        ["deployment/argocd-redis","argocd"],
+        ["deployment/argocd-repo-server","argocd"],
+        ["deployment/argocd-server","argocd"]
+      ]
+    }
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: scaling-state-pvc
+  namespace: tools
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: nfs
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: scaling-startup-cronjob
+  namespace: tools
+spec:
+  schedule: "0 5 * * 1-5" 
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          imagePullSecrets:
+          - name: ocirsecret
+          restartPolicy: Never
+          volumes:
+            - name: config-volume
+              configMap:
+                name: scaling-config
+            - name: oci-config-volume
+              secret:
+                secretName: oci-automation-config
+                items:
+                - key: config
+                  path: config
+                  mode: 0400
+            - name: oci-pem-volume
+              secret:
+                secretName: oci-automation-config
+                items:
+                - key: oci_api_key.pem
+                  path: oci_api_key.pem
+                  mode: 0400
+            - name: kubeconfig-volume
+              secret:
+                secretName: k8s-automation-config
+                items:
+                - key: kubeconfig
+                  path: kubeconfig
+                  mode: 0400
+            - name: state-volume
+              persistentVolumeClaim:
+                claimName: scaling-state-pvc
+          containers:
+            - name: scaling-script
+              image: <registry>/k8s-cluster-scaling:release-v1
+              command: ["python3", "k8s_cluster_autoscaling.py", "startup"]
+              volumeMounts:
+                - name: config-volume
+                  mountPath: /app/config/config.json
+                  subPath: config.json
+                  readOnly: true
+                - name: oci-config-volume
+                  mountPath: /root/.oci/config
+                  subPath: config
+                  readOnly: true
+                - name: oci-pem-volume
+                  mountPath: /root/.oci/oci_api_key.pem
+                  subPath: oci_api_key.pem
+                  readOnly: true
+                - name: kubeconfig-volume
+                  mountPath: /root/.kube
+                  readOnly: true
+                - name: state-volume
+                  mountPath: /var/tmp
+              env:
+              - name: KUBECONFIG
+                value: "/root/.kube/kubeconfig"       
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: scaling-shutdown-cronjob
+  namespace: tools
+spec:
+  schedule: "0 19 * * 1-5" 
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          imagePullSecrets:
+          - name: ocirsecret
+          restartPolicy: Never
+          volumes:
+            - name: config-volume
+              configMap:
+                name: scaling-config
+            - name: oci-config-volume
+              secret:
+                secretName: oci-automation-config
+                items:
+                - key: config
+                  path: config
+                  mode: 0400
+            - name: oci-pem-volume
+              secret:
+                secretName: oci-automation-config
+                items:
+                - key: oci_api_key.pem
+                  path: oci_api_key.pem
+                  mode: 0400
+            - name: kubeconfig-volume
+              secret:
+                secretName: k8s-automation-config
+                items:
+                - key: kubeconfig
+                  path: kubeconfig
+                  mode: 0400
+            - name: state-volume
+              persistentVolumeClaim:
+                claimName: scaling-state-pvc
+          containers:
+            - name: scaling-script
+              image: <registry>/k8s-cluster-scaling:release-v3
+              command: ["python3", "k8s_cluster_autoscaling.py", "shutdown"]
+              volumeMounts:
+                - name: config-volume
+                  mountPath: /app/config/config.json
+                  subPath: config.json
+                  readOnly: true
+                - name: oci-config-volume
+                  mountPath: /root/.oci/config
+                  subPath: config
+                  readOnly: true
+                - name: oci-pem-volume
+                  mountPath: /root/.oci/oci_api_key.pem
+                  subPath: oci_api_key.pem
+                  readOnly: true
+                - name: kubeconfig-volume
+                  mountPath: /root/.kube
+                  readOnly: true
+                - name: state-volume
+                  mountPath: /var/tmp
+              env:
+              - name: KUBECONFIG
+                value: "/root/.kube/kubeconfig"
+---
